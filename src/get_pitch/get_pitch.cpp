@@ -25,6 +25,12 @@ Usage:
     get_pitch --version
 
 Options:
+    -m REAL, --medfilt=REAL  Longitud filtro de mediana. [default: 1]
+    -c REAL, --clipmult=REAL  Valor clipping [default: 0.0075]
+    -r REAL, --umbral_rlag=REAL  Umbral autocrrelación normalizada.[default: 0.4]
+    -1 REAL, --umbral_r1r0=REAL  Umbral r[1]/r[0]. [default: 0.55]
+    -z REAL, --umbral_zcr=REAL  Umbral ZCR. [default: 30]
+
     -h, --help  Show this screen
     --version   Show the version of the project
 
@@ -34,9 +40,14 @@ Arguments:
                     - One line per frame with the estimated f0
                     - If considered unvoiced, f0 must be set to f0 = 0
 )";
-
+float abs_f(float value){
+  if (value < 0.0)
+    return -1.0*value;
+  return value;
+}
 int main(int argc, const char *argv[]) {
 	/// \TODO 
+  /// \DONE
 	///  Modify the program syntax and the call to **docopt()** in order to
 	///  add options and arguments to the program.
     std::map<std::string, docopt::value> args = docopt::docopt(USAGE,
@@ -46,6 +57,11 @@ int main(int argc, const char *argv[]) {
 
 	std::string input_wav = args["<input-wav>"].asString();
 	std::string output_txt = args["<output-txt>"].asString();
+  float umbral_rlag = stof(args["--umbral_rlag"].asString());
+  float clipmult = stof(args["--clipmult"].asString());
+  float umbral_r1r0 = stof(args["--umbral_r1r0"].asString());
+  float umbral_zcr = stof(args["--umbral_zcr"].asString());
+  float medfilt = stof(args["--medfilt"].asString());
 
   // Read input sound file
   unsigned int rate;
@@ -59,23 +75,70 @@ int main(int argc, const char *argv[]) {
   int n_shift = rate * FRAME_SHIFT;
 
   // Define analyzer
-  PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::RECT, 50, 500);
+  PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::RECT, 50, 500, umbral_rlag,umbral_r1r0, umbral_zcr);
 
   /// \TODO
-  /// Preprocess the input signal in order to ease pitch estimation. For instance,
-  /// central-clipping or low pass filtering may be used.
-  
+  /// \DONE
+  /// Preprocess the input signal in order to ease pitch estimation. For instance, central-clipping or low pass filtering may be used.
+
+  std::vector<float>::iterator iX, it;
+
+  // CLIPPING
   // Iterate for each frame and save values in f0 vector
-  vector<float>::iterator iX;
+  // Get Max value in magnitude, either positive or negative 
+  float Cl = -1.0;
+  for(iX = x.begin(); iX < x.end(); ++iX){    
+    Cl = std::max(Cl, abs_f(*iX));
+  }
+  Cl = clipmult * Cl;
+
   vector<float> f0;
+  float f, aux, prev, act, zcr=0; 
+  float cte = rate / (2 * (n_len - 1));
   for (iX = x.begin(); iX + n_len < x.end(); iX = iX + n_shift) {
-    float f = analyzer(iX, iX + n_len);
+    //Implement code to pass its original ZCR value.
+    prev=0; aux=0;
+    for(it = iX; it < iX + n_len; ++it){  //COMPUTE ZCR and Clipping:
+      act = *it;
+      if((act * prev) < 0){ aux++;}
+      prev = act;
+
+      if(abs(act) < Cl){ *it = 0;}
+      else *it = *it + Cl * ((act < 0) - (act > 0));
+    }
+    
+    zcr = aux * cte;
+    //cout << zcr <<"\t"<< aux <<"\t"<< rate <<"\t"<< n_len <<"\t"<< endl;
+    f = analyzer(iX, iX + n_len, zcr);
     f0.push_back(f);
   }
 
+  // JUST ODD NUMBERS  
+  int F_size = medfilt;  
+  vector<float> filter; 
+  
   /// \TODO
+  /// \DONE
   /// Postprocess the estimation in order to supress errors. For instance, a median filter
-  /// or time-warping may be used.
+
+  for(iX = f0.begin(); iX < f0.end() - (F_size - 1); ++iX){    
+    for(int i = 0; i<F_size; i++)      
+      filter.push_back(*(iX+i));
+    int k, l;
+
+    for(k = 0; k < F_size-1; k++){      // Sort:
+      for(l = 0; l < F_size-k-1; l++){
+        if (filter[l] > filter[l+1]){        
+          aux = filter[l];        
+          filter[l] = filter[l+1]; 
+          filter[l+1] = aux;      
+        }    
+      }   
+    }
+    // Get median    
+    f0[iX - f0.begin()] = filter[F_size/2];
+    filter.clear();  
+  } 
 
   // Write f0 contour into the output file
   ofstream os(output_txt);
